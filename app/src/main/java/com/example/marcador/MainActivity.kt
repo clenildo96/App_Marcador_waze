@@ -344,6 +344,71 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+    private fun iniciarModoFlutuante() {
+
+        if (!android.provider.Settings.canDrawOverlays(this)) {
+
+            try {
+                val intent = Intent(
+                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:")
+                )
+
+                startActivity(intent)
+
+            } catch (_: Exception) {
+
+                startActivity(
+                    Intent(
+                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION
+                    )
+                )
+            }
+
+            Toast.makeText(
+                this,
+                "Ative a permissão 'Exibir sobre outros apps' para o Marcador.",
+                Toast.LENGTH_LONG
+            ).show()
+
+            return
+        }
+
+        val fine = ActivityCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        val coarse = ActivityCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!fine && !coarse) {
+            verificarPermissoes()
+            return
+        }
+
+        val intent = Intent(
+            this,
+            MarcadorFloatingService::class.java
+        )
+
+        if (android.os.Build.VERSION.SDK_INT >=
+            android.os.Build.VERSION_CODES.O
+        ) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+
+        Toast.makeText(
+            this,
+            "Modo flutuante iniciado.",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
     private fun iniciarGPS() {
         if (!temPermissao()) {
             tvStatus.text = "Permissão de localização necessária"
@@ -689,6 +754,11 @@ class MainActivity : AppCompatActivity() {
                     exportar(FormatoExportacao.KML)
                 }
 
+            val btnModoFlutuante =
+                criarBotaoDestaque("MODO FLUTUANTE") {
+                    iniciarModoFlutuante()
+                }
+
             val btnLimparTodos =
                 criarBotao("🗑  LIMPAR TODOS OS PONTOS") {
                     confirmarLimparTodos()
@@ -697,6 +767,7 @@ class MainActivity : AppCompatActivity() {
             acoes.addView(btnMonitorGNSS)
             acoes.addView(btnExportarJSON)
             acoes.addView(btnExportarKML)
+            acoes.addView(btnModoFlutuante)
             acoes.addView(btnLimparTodos)
 
             fundo.addView(acoes)
