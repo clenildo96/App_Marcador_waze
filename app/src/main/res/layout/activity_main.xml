@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Marcador"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:gravity="center" />
+
+    <TextView
+        android:id="@+id/tvTotal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Total: 0"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:textColor="#2196F3" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="8dp">
+
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Lat" android:textSize="12sp" />
+        <TextView android:id="@+id/tvLatitude" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="---" android:textSize="14sp" android:textStyle="bold" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Lon" android:textSize="12sp" />
+        <TextView android:id="@+id/tvLongitude" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="---" android:textSize="14sp" android:textStyle="bold" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="0.5" android:text="Prec" android:textSize="12sp" />
+        <TextView android:id="@+id/tvPrecisao" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="0.5" android:text="---" android:textSize="14sp" android:textStyle="bold" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="0.3" android:text="Sat" android:textSize="12sp" />
+        <TextView android:id="@+id/tvSatelites" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="0.3" android:text="0" android:textSize="14sp" android:textStyle="bold" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Aguardando GPS"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:padding="8dp"
+        android:background="#FFF3E0" />
+
+    <Button
+        android:id="@+id/btnPegarGPS"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Pegar GPS"
+        android:layout_marginBottom="8dp"
+        android:backgroundTint="#4CAF50"
+        android:textColor="#FFFFFF" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Salvar:"
+        android:textSize="14sp"
+        android:gravity="center" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recyclerCategorias"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="8dp">
+
+        <Button
+            android:id="@+id/btnNovaCategoria"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Nova"
+            android:layout_marginEnd="4dp" />
+
+        <Button
+            android:id="@+id/btnCompartilhar"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="JSON"
+            android:layout_marginStart="4dp" />
+
+    </LinearLayout>
+
+</LinearLayout>
