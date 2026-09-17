@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         Locador WME
 // @namespace    LocadorWME
-// @version      2.4.0
-// @description  Exibe pontos de um KML no Waze Map Editor para análise individual.
-// @author       Você
+// @version      3.0.2
+// @description  Levantamento de campo integrado ao WME SDK.
+// @author       Clenildo
 // @match        https://www.waze.com/*/editor*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=waze.com
+// @updateURL    https://raw.githubusercontent.com/clenildo96/App_Marcador_waze/main/Locador_WME.user.js
+// @downloadURL  https://raw.githubusercontent.com/clenildo96/App_Marcador_waze/main/Locador_WME.user.js
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==
@@ -14,82 +16,123 @@
 
     'use strict';
 
+    /******************************************************************
+     * CONFIGURAÇÃO
+     ******************************************************************/
+
     const SCRIPT_ID = 'locador-wme';
     const SCRIPT_NAME = 'Locador WME';
-    const LAYER_NAME = 'locador-wme-pontos';
 
-    const STORAGE_KEY = 'locador_wme_progresso_v2';
-    const PANEL_POSITION_KEY = 'locador_wme_painel_posicao_v1';
-    const PANEL_HEIGHT_KEY = 'locador_wme_painel_altura_v2';
+    const LAYER_NAME = 'locador-wme-pontos';
+    const LAYER_CHECKBOX_NAME = 'Locador — Pontos de campo';
+
+    const STORAGE_KEY = 'locador_wme_progresso_v4';
+    const UI_STATE_KEY = 'locador_wme_ui_v3';
 
     const ZOOM_DO_PONTO = 20;
-    const ALTURA_MINIMA = 180;
 
     let sdk = null;
 
     let pontos = [];
     let pontoAtual = -1;
+
     let kmlNome = '';
 
+    let tabLabel = null;
+    let tabPane = null;
     let painel = null;
 
-    let arrastando = false;
-    let arrastoOffsetX = 0;
-    let arrastoOffsetY = 0;
+    let camadaCriada = false;
+    let eventosCamadaAtivos = false;
+    let checkboxCriado = false;
 
-    let redimensionando = false;
-    let alturaInicial = 0;
-    let mouseInicialY = 0;
 
-    /************************************************************
+    /******************************************************************
      * LOG
-     ************************************************************/
+     ******************************************************************/
 
     function log(...args) {
-        console.log('[Locador WME]', ...args);
+
+        console.log(
+            '[Locador WME]',
+            ...args
+        );
+
     }
 
-    /************************************************************
+
+    function logErro(...args) {
+
+        console.error(
+            '[Locador WME]',
+            ...args
+        );
+
+    }
+
+
+    /******************************************************************
      * SDK
-     ************************************************************/
+     ******************************************************************/
 
     function iniciarSDK() {
 
-        /*
-         * O WME pode executar o userscript antes do SDK existir.
-         * Por isso aguardamos o SDK.
-         */
-
         if (!window.SDK_INITIALIZED) {
-            setTimeout(iniciarSDK, 500);
+
+            setTimeout(
+                iniciarSDK,
+                500
+            );
+
             return;
+
         }
+
 
         window.SDK_INITIALIZED
             .then(() => {
 
                 try {
 
-                    if (typeof window.getWmeSdk !== 'function') {
+                    if (
+                        typeof window.getWmeSdk !==
+                        'function'
+                    ) {
+
                         throw new Error(
                             'getWmeSdk não está disponível.'
                         );
+
                     }
 
-                    sdk = window.getWmeSdk({
-                        scriptId: SCRIPT_ID,
-                        scriptName: SCRIPT_NAME
-                    });
 
-                    log('SDK inicializado.');
+                    sdk =
+                        window.getWmeSdk({
+
+                            scriptId:
+                                SCRIPT_ID,
+
+                            scriptName:
+                                SCRIPT_NAME
+
+                        });
+
+
+                    log(
+                        'SDK inicializado:',
+                        sdk.getSDKVersion?.()
+                            ||
+                        'versão desconhecida'
+                    );
+
 
                     iniciar();
 
                 }
                 catch (erro) {
 
-                    console.error(
-                        '[Locador WME] Erro ao obter SDK:',
+                    logErro(
+                        'Erro ao obter SDK:',
                         erro
                     );
 
@@ -98,8 +141,8 @@
             })
             .catch(erro => {
 
-                console.error(
-                    '[Locador WME] Erro no SDK:',
+                logErro(
+                    'Erro no SDK:',
                     erro
                 );
 
@@ -107,275 +150,240 @@
 
     }
 
-    /************************************************************
-     * INICIAR
-     ************************************************************/
 
-    function iniciar() {
+    /******************************************************************
+     * INICIAR
+     ******************************************************************/
+
+    async function iniciar() {
 
         if (!sdk) {
             return;
         }
 
+
         criarCSS();
-        criarPainel();
+
+        await criarSidebar();
+
         criarCamada();
 
-        log('Locador WME pronto.');
+        criarLayerSwitcher();
 
-    }
+        configurarEventosSDK();
 
-    /************************************************************
-     * CAMADA
-     ************************************************************/
 
-    function criarCamada() {
-
-        try {
-
-            sdk.Map.addLayer({
-
-                layerName: LAYER_NAME,
-
-                zIndexing: true,
-
-                styleRules: [
-
-                    /*
-                     * PADRÃO — PENDENTE
-                     */
-                    {
-                        style: {
-                            externalGraphic:
-                                criarMarcadorSVG(
-                                    '#d32f2f',
-                                    false
-                                ),
-
-                            graphicWidth: 30,
-                            graphicHeight: 30,
-
-                            graphicXOffset: -15,
-                            graphicYOffset: -15,
-
-                            fillOpacity: 1
-                        }
-                    },
-
-                    /*
-                     * ANALISADO
-                     */
-                    {
-                        predicate: propriedades =>
-                            propriedades.analisado === true,
-
-                        style: {
-
-                            externalGraphic:
-                                criarMarcadorSVG(
-                                    '#2e7d32',
-                                    false
-                                ),
-
-                            graphicWidth: 30,
-                            graphicHeight: 30,
-
-                            graphicXOffset: -15,
-                            graphicYOffset: -15,
-
-                            fillOpacity: 1
-                        }
-                    },
-
-                    /*
-                     * PONTO ATUAL
-                     */
-                    {
-                        predicate: propriedades =>
-                            propriedades.locadorAtual === true,
-
-                        style: {
-
-                            externalGraphic:
-                                criarMarcadorSVG(
-                                    '#ff9800',
-                                    true
-                                ),
-
-                            graphicWidth: 38,
-                            graphicHeight: 38,
-
-                            graphicXOffset: -19,
-                            graphicYOffset: -19,
-
-                            fillOpacity: 1
-                        }
-                    }
-
-                ]
-
-            });
-
-        }
-        catch (erro) {
-
-            console.error(
-                '[Locador WME] Erro criando camada:',
-                erro
-            );
-
-        }
-
-    }
-
-    /************************************************************
-     * SVG DOS MARCADORES
-     ************************************************************/
-
-    function criarMarcadorSVG(cor, estrela) {
-
-        let conteudo;
-
-        if (estrela) {
-
-            conteudo = `
-                <path
-                    d="
-                    M20 3
-                    L24.2 13.1
-                    L35 13.9
-                    L26.7 20.9
-                    L29.3 31.4
-                    L20 25.8
-                    L10.7 31.4
-                    L13.3 20.9
-                    L5 13.9
-                    L15.8 13.1
-                    Z
-                    "
-                    fill="${cor}"
-                    stroke="#ffffff"
-                    stroke-width="2.5"
-                />
-            `;
-
-        }
-        else {
-
-            conteudo = `
-                <circle
-                    cx="20"
-                    cy="20"
-                    r="16"
-                    fill="${cor}"
-                    stroke="#ffffff"
-                    stroke-width="3"
-                />
-            `;
-
-        }
-
-        const svg = `
-            <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="40"
-                height="40"
-                viewBox="0 0 40 40"
-            >
-                ${conteudo}
-            </svg>
-        `;
-
-        return (
-            'data:image/svg+xml;charset=UTF-8,' +
-            encodeURIComponent(svg)
+        log(
+            'Locador WME 3.0.2 pronto.'
         );
 
     }
 
-    /************************************************************
-     * PAINEL
-     ************************************************************/
 
-    function criarPainel() {
+    /******************************************************************
+     * SIDEBAR WME
+     ******************************************************************/
 
-        painel = document.createElement('div');
+    async function criarSidebar() {
 
-        painel.id = 'locador-wme-painel';
+        try {
 
-        painel.innerHTML = `
+            const resultado =
+                await sdk.Sidebar.registerScriptTab();
 
-            <div
-                id="locador-cabecalho"
-                title="Arraste para mover"
-            >
 
-                <strong>
-                    📍 LOCADOR WME
-                </strong>
+            tabLabel =
+                resultado.tabLabel;
 
-                <span id="locador-arrastar">
-                    ⠿
-                </span>
 
-                <button
-                    id="locador-minimizar"
-                    title="Minimizar"
-                    type="button"
-                >
-                    −
-                </button>
+            tabPane =
+                resultado.tabPane;
 
-            </div>
 
-            <div id="locador-conteudo">
+            tabLabel.textContent =
+                '📍 Locador';
+
+
+            tabLabel.title =
+                'Locador — levantamento de campo';
+
+
+            tabPane.innerHTML =
+                '';
+
+
+            painel =
+                document.createElement(
+                    'div'
+                );
+
+
+            painel.id =
+                'locador-wme-painel';
+
+
+            painel.innerHTML =
+                criarHTMLPainel();
+
+
+            tabPane.appendChild(
+                painel
+            );
+
+
+            configurarEventosPainel();
+
+            restaurarEstadoUI();
+
+
+            log(
+                'Aba Locador registrada no Sidebar.'
+            );
+
+        }
+        catch (erro) {
+
+            logErro(
+                'Não foi possível criar a aba do Sidebar:',
+                erro
+            );
+
+
+            criarPainelFallback();
+
+        }
+
+    }
+
+
+    /******************************************************************
+     * HTML DO PAINEL
+     ******************************************************************/
+
+    function criarHTMLPainel() {
+
+        return `
+
+            <div class="locador-container">
+
+                <div class="locador-header">
+
+                    <div class="locador-title">
+
+                        <span class="locador-title-icon">
+                            📍
+                        </span>
+
+                        <span>
+                            LOCADOR WME
+                        </span>
+
+                    </div>
+
+                    <div class="locador-version">
+                        3.0.2
+                    </div>
+
+                </div>
+
 
                 <label class="locador-carregar">
 
-                    📂 CARREGAR KML
+                    <span>
+                        📂 CARREGAR KML / KMZ
+                    </span>
 
                     <input
                         type="file"
                         id="locador-arquivo"
-                        accept=".kml,.xml"
+                        accept=".kml,.xml,.kmz"
                     >
 
                 </label>
 
-                <div id="locador-status">
-                    Nenhum KML carregado.
+
+                <div
+                    id="locador-status"
+                    class="locador-status"
+                >
+
+                    Nenhum levantamento carregado.
+
                 </div>
+
 
                 <div class="locador-contadores">
 
-                    <div>
-                        <b id="locador-total">0</b>
-                        <span>TOTAL</span>
+                    <div class="locador-contador">
+
+                        <b id="locador-total">
+                            0
+                        </b>
+
+                        <span>
+                            TOTAL
+                        </span>
+
                     </div>
 
-                    <div>
-                        <b id="locador-analisados">0</b>
-                        <span>ANALISADOS</span>
+
+                    <div class="locador-contador">
+
+                        <b id="locador-analisados">
+                            0
+                        </b>
+
+                        <span>
+                            ANALISADOS
+                        </span>
+
                     </div>
 
-                    <div>
-                        <b id="locador-pendentes">0</b>
-                        <span>PENDENTES</span>
+
+                    <div class="locador-contador">
+
+                        <b id="locador-pendentes">
+                            0
+                        </b>
+
+                        <span>
+                            PENDENTES
+                        </span>
+
                     </div>
 
                 </div>
 
-                <div class="locador-lista-titulo">
-                    PRÓXIMOS PONTOS
+
+                <div class="locador-secao-titulo">
+
+                    <span>
+                        PRÓXIMOS PONTOS
+                    </span>
+
+                    <span
+                        id="locador-progresso"
+                        class="locador-progresso"
+                    >
+                        0%
+                    </span>
+
                 </div>
 
-                <div id="locador-lista">
+
+                <div
+                    id="locador-lista"
+                    class="locador-lista"
+                >
 
                     <div class="locador-vazio">
-                        Carregue um arquivo KML.
+
+                        📂 Carregue um KML/KMZ
+
                     </div>
 
                 </div>
+
 
                 <div
                     id="locador-info"
@@ -383,64 +391,96 @@
                 >
                 </div>
 
-                <div class="locador-botoes">
+
+                <div class="locador-navegacao">
 
                     <button
                         id="locador-anterior"
-                        type="button"
-                        disabled
                         title="Ponto anterior"
+                        disabled
                     >
                         ◀
                     </button>
 
+
                     <button
                         id="locador-ir"
-                        type="button"
+                        class="locador-ir"
                         disabled
                     >
                         📍 IR AO PONTO
                     </button>
 
+
                     <button
                         id="locador-proximo"
-                        type="button"
-                        disabled
                         title="Próximo ponto"
+                        disabled
                     >
                         ▶
                     </button>
 
                 </div>
 
+
                 <button
                     id="locador-marcar"
-                    class="locador-marcar"
-                    type="button"
+                    class="locador-btn analisado"
                     disabled
                 >
                     ☐ MARCAR COMO ANALISADO
                 </button>
 
+
                 <button
                     id="locador-limpar"
-                    class="locador-limpar"
-                    type="button"
+                    class="locador-btn limpar"
                     disabled
                 >
-                    🗑 LIMPAR KML
+                    🗑 LIMPAR LEVANTAMENTO
                 </button>
+
+
+                <div class="locador-legenda">
+
+                    <div>
+                        <span
+                            class="legenda-ponto vermelho"
+                        ></span>
+                        Pendente
+                    </div>
+
+                    <div>
+                        <span
+                            class="legenda-ponto verde"
+                        ></span>
+                        Analisado
+                    </div>
+
+                    <div>
+                        <span
+                            class="legenda-ponto laranja"
+                        ></span>
+                        Atual
+                    </div>
+
+                </div>
+
 
                 <div class="locador-ajuda">
 
-                    <b>Lista:</b>
-                    clique em qualquer ponto para navegar.
+                    <b>💡 Dica</b>
+
+                    <br>
+
+                    Clique diretamente em um ponto
+                    no mapa para selecioná-lo.
 
                     <br><br>
 
                     🔴 Pendente
 
-                    <br>
+                    &nbsp;&nbsp;
 
                     🟢 Analisado
 
@@ -448,35 +488,81 @@
 
                     ⭐ Ponto atual
 
+                    <br><br>
+
+                    Passe o mouse sobre um ponto
+                    no mapa para ver suas propriedades.
+
                 </div>
 
             </div>
 
-            <div
-                id="locador-resize"
-                title="Arraste para alterar a altura"
-            >
-                ↕
-            </div>
-
         `;
 
-        document.body.appendChild(painel);
+    }
 
-        /********************************************************
-         * EVENTOS
-         ********************************************************/
 
-        document
-            .getElementById('locador-arquivo')
-            .addEventListener(
-                'change',
-                carregarKML
+    /******************************************************************
+     * FALLBACK
+     ******************************************************************/
+
+    function criarPainelFallback() {
+
+        painel =
+            document.createElement(
+                'div'
             );
 
-        document
-            .getElementById('locador-anterior')
-            .addEventListener(
+
+        painel.id =
+            'locador-wme-painel-fallback';
+
+
+        painel.innerHTML =
+            criarHTMLPainel();
+
+
+        document.body.appendChild(
+            painel
+        );
+
+
+        configurarEventosPainel();
+
+    }
+
+
+    /******************************************************************
+     * EVENTOS DO PAINEL
+     ******************************************************************/
+
+    function configurarEventosPainel() {
+
+        const arquivo =
+            document.getElementById(
+                'locador-arquivo'
+            );
+
+
+        if (arquivo) {
+
+            arquivo.addEventListener(
+                'change',
+                carregarArquivo
+            );
+
+        }
+
+
+        const anterior =
+            document.getElementById(
+                'locador-anterior'
+            );
+
+
+        if (anterior) {
+
+            anterior.addEventListener(
                 'click',
                 () => {
 
@@ -488,9 +574,18 @@
                 }
             );
 
-        document
-            .getElementById('locador-proximo')
-            .addEventListener(
+        }
+
+
+        const proximo =
+            document.getElementById(
+                'locador-proximo'
+            );
+
+
+        if (proximo) {
+
+            proximo.addEventListener(
                 'click',
                 () => {
 
@@ -502,9 +597,18 @@
                 }
             );
 
-        document
-            .getElementById('locador-ir')
-            .addEventListener(
+        }
+
+
+        const ir =
+            document.getElementById(
+                'locador-ir'
+            );
+
+
+        if (ir) {
+
+            ir.addEventListener(
                 'click',
                 () => {
 
@@ -515,32 +619,40 @@
                 }
             );
 
-        document
-            .getElementById('locador-marcar')
-            .addEventListener(
+        }
+
+
+        const marcar =
+            document.getElementById(
+                'locador-marcar'
+            );
+
+
+        if (marcar) {
+
+            marcar.addEventListener(
                 'click',
                 marcarAnalisado
             );
 
-        document
-            .getElementById('locador-limpar')
-            .addEventListener(
+        }
+
+
+        const limpar =
+            document.getElementById(
+                'locador-limpar'
+            );
+
+
+        if (limpar) {
+
+            limpar.addEventListener(
                 'click',
                 limparKML
             );
 
-        document
-            .getElementById('locador-minimizar')
-            .addEventListener(
-                'click',
-                alternarPainel
-            );
+        }
 
-        configurarArrastar();
-        configurarRedimensionamento();
-
-        restaurarPosicaoPainel();
-        restaurarAlturaPainel();
 
         document.addEventListener(
             'keydown',
@@ -549,705 +661,1352 @@
 
     }
 
-    /************************************************************
-     * TECLADO
-     ************************************************************/
 
-    function tratarTeclado(event) {
+    /******************************************************************
+     * CAMADA SDK
+     *
+     * IMPORTANTE:
+     * Aqui permanece o mesmo modelo da versão que você enviou.
+     * O label NÃO recebe a função diretamente.
+     * Ele usa styleContext -> getLabel.
+     ******************************************************************/
 
-        if (
-            event.target instanceof HTMLInputElement ||
-            event.target instanceof HTMLTextAreaElement ||
-            event.target instanceof HTMLSelectElement
-        ) {
+    function criarCamada() {
+
+        if (!sdk) {
             return;
         }
 
-        if (
-            event.key === 'ArrowLeft' &&
-            pontoAtual > 0
-        ) {
 
-            event.preventDefault();
-
-            selecionarPonto(
-                pontoAtual - 1,
-                true
-            );
-
-        }
-
-        if (
-            event.key === 'ArrowRight' &&
-            pontoAtual < pontos.length - 1
-        ) {
-
-            event.preventDefault();
-
-            selecionarPonto(
-                pontoAtual + 1,
-                true
-            );
-
-        }
-
-    }
-
-    /************************************************************
-     * LISTA DOS 10
-     ************************************************************/
-
-    function atualizarLista() {
-
-        const lista =
-            document.getElementById(
-                'locador-lista'
-            );
-
-        if (!lista) {
+        if (camadaCriada) {
             return;
         }
 
-        if (!pontos.length) {
 
-            lista.innerHTML = `
-                <div class="locador-vazio">
-                    Carregue um arquivo KML.
-                </div>
-            `;
+        try {
 
-            return;
+            sdk.Map.addLayer({
 
-        }
+                layerName:
+                    LAYER_NAME,
 
-        /*
-         * Mostra até 10 pontos a partir do atual.
-         *
-         * Se estiver perto do final,
-         * volta para que ainda existam 10 itens
-         * quando possível.
-         */
+                zIndexing:
+                    true,
 
-        let inicio =
-            Math.max(
-                0,
-                pontoAtual
-            );
 
-        if (inicio + 10 > pontos.length) {
+                styleContext: {
 
-            inicio =
-                Math.max(
-                    0,
-                    pontos.length - 10
-                );
+                    /**************************************************
+                     * ÍCONE
+                     **************************************************/
 
-        }
+                    getGraphic:
+                        ({ feature }) => {
 
-        const fim =
-            Math.min(
-                pontos.length,
-                inicio + 10
-            );
+                            return criarIconeSVG(
+                                feature?.properties
+                            );
 
-        let html = '';
+                        },
 
-        for (
-            let i = inicio;
-            i < fim;
-            i++
-        ) {
 
-            const ponto =
-                pontos[i];
+                    /**************************************************
+                     * RÓTULO
+                     **************************************************/
 
-            const atual =
-                i === pontoAtual;
+                    getLabel:
+                        ({ feature }) => {
 
-            const classeEstado =
-                ponto.analisado
-                    ? 'analisado'
-                    : 'pendente';
+                            return criarRotulo(
+                                feature?.properties
+                            );
 
-            html += `
+                        },
 
-                <div
-                    class="
-                        locador-item
-                        ${atual ? 'atual' : ''}
-                        ${classeEstado}
-                    "
-                    data-index="${i}"
-                    role="button"
-                    tabindex="0"
-                    title="Clique para navegar ao ponto ${ponto.numero}"
-                >
 
-                    <div class="locador-item-numero">
+                    /**************************************************
+                     * TOOLTIP
+                     *
+                     * Mostra TODAS as propriedades do ponto.
+                     **************************************************/
 
-                        ${
-                            atual
-                                ? '⭐'
-                                : (
-                                    ponto.analisado
-                                        ? '✓'
-                                        : '○'
+                    getTitle:
+                        ({ feature }) => {
+
+                            const p =
+                                feature?.properties;
+
+
+                            if (!p) {
+
+                                return 'Locador';
+
+                            }
+
+
+                            return Object.entries(p)
+
+                                .filter(
+                                    ([chave, valor]) =>
+
+                                        valor !== null
+                                        &&
+                                        valor !== undefined
+                                        &&
+                                        valor !== ''
+
                                 )
-                        }
 
-                        ${ponto.numero}
+                                .map(
+                                    ([chave, valor]) =>
 
-                    </div>
+                                        `${chave}: ${valor}`
 
-                    <div class="locador-item-nome">
+                                )
 
-                        ${escapeHTML(
-                            ponto.nome
-                        )}
+                                .join('\n');
 
-                    </div>
+                        },
 
-                    <div class="locador-item-coord">
 
-                        ${ponto.latitude.toFixed(5)},
-                        ${ponto.longitude.toFixed(5)}
+                    /**************************************************
+                     * COR DO RÓTULO
+                     *
+                     * ANALISADO = VERDE
+                     **************************************************/
 
-                    </div>
+                    getFontColor:
+                        ({ feature }) => {
 
-                </div>
+                            const p =
+                                feature?.properties;
 
-            `;
 
-        }
+                            /*
+                             * Se analisado, fica VERDE.
+                             * Isso tem prioridade sobre o ponto atual.
+                             */
 
-        lista.innerHTML = html;
+                            if (
+                                p?.analisado === true
+                            ) {
 
-        /*
-         * CLIQUE NA LISTA
-         *
-         * Este é o ponto principal da alteração:
-         *
-         * qualquer um dos 10 itens pode ser clicado
-         * e o mapa será levado imediatamente para ele.
-         */
+                                return '#2e7d32';
 
-        lista
-            .querySelectorAll('.locador-item')
-            .forEach(item => {
+                            }
 
-                item.addEventListener(
-                    'click',
-                    () => {
 
-                        const index =
-                            Number(
-                                item.dataset.index
-                            );
+                            /*
+                             * Ponto atual pendente.
+                             */
 
-                        selecionarPonto(
-                            index,
-                            true
-                        );
+                            if (
+                                p?.locadorAtual === true
+                            ) {
 
-                    }
-                );
+                                return '#e65100';
 
-                item.addEventListener(
-                    'keydown',
-                    event => {
+                            }
 
-                        if (
-                            event.key === 'Enter' ||
-                            event.key === ' '
-                        ) {
 
-                            event.preventDefault();
+                            /*
+                             * Pendente.
+                             */
 
-                            const index =
-                                Number(
-                                    item.dataset.index
-                                );
+                            return '#b71c1c';
 
-                            selecionarPonto(
-                                index,
-                                true
-                            );
+                        },
+
+
+                    /**************************************************
+                     * TAMANHO
+                     **************************************************/
+
+                    getFontSize:
+                        ({ feature }) => {
+
+                            const p =
+                                feature?.properties;
+
+
+                            return p?.locadorAtual
+                                ? '13px'
+                                : '11px';
 
                         }
 
+                },
+
+
+                /****************************************************
+                 * ESTILOS
+                 ****************************************************/
+
+                styleRules: [
+
+                    /*
+                     * ESTILO PADRÃO
+                     */
+                    {
+
+                        style: {
+
+                            externalGraphic:
+                                '${getGraphic}',
+
+                            graphicWidth:
+                                32,
+
+                            graphicHeight:
+                                32,
+
+                            graphicXOffset:
+                                -16,
+
+                            graphicYOffset:
+                                -16,
+
+                            fillOpacity:
+                                1,
+
+
+                            /*
+                             * O RÓTULO ORIGINAL
+                             */
+                            label:
+                                '${getLabel}',
+
+                            labelAlign:
+                                'cm',
+
+                            labelXOffset:
+                                0,
+
+                            labelYOffset:
+                                -28,
+
+
+                            fontColor:
+                                '${getFontColor}',
+
+                            fontFamily:
+                                'Arial, sans-serif',
+
+                            fontWeight:
+                                'bold',
+
+                            fontSize:
+                                '${getFontSize}',
+
+
+                            /*
+                             * Contorno branco.
+                             *
+                             * Isso mantém o rótulo legível
+                             * sobre o mapa.
+                             */
+                            labelOutlineColor:
+                                '#ffffff',
+
+                            labelOutlineWidth:
+                                4,
+
+                            labelOutlineOpacity:
+                                0.95,
+
+
+                            /*
+                             * TOOLTIP
+                             */
+                            title:
+                                '${getTitle}',
+
+
+                            pointerEvents:
+                                'visiblePainted',
+
+                            cursor:
+                                'pointer'
+
+                        }
+
+                    },
+
+
+                    /*
+                     * PONTO ATUAL
+                     *
+                     * SOMENTE se ainda NÃO estiver analisado.
+                     */
+                    {
+
+                        predicate:
+                            properties =>
+
+                                properties.locadorAtual === true
+                                &&
+                                properties.analisado !== true,
+
+
+                        style: {
+
+                            graphicWidth:
+                                42,
+
+                            graphicHeight:
+                                42,
+
+                            graphicXOffset:
+                                -21,
+
+                            graphicYOffset:
+                                -21,
+
+                            labelYOffset:
+                                -34,
+
+                            fontSize:
+                                '13px',
+
+                            labelOutlineWidth:
+                                5
+
+                        }
+
                     }
-                );
+
+                ]
 
             });
 
-    }
 
-    /************************************************************
-     * ARRASTAR PAINEL
-     ************************************************************/
+            camadaCriada =
+                true;
 
-    function configurarArrastar() {
 
-        const cabecalho =
-            document.getElementById(
-                'locador-cabecalho'
+            log(
+                'Camada criada:',
+                LAYER_NAME
             );
 
-        cabecalho.addEventListener(
-            'mousedown',
-            iniciarArrasto
-        );
-
-        document.addEventListener(
-            'mousemove',
-            moverPainel
-        );
-
-        document.addEventListener(
-            'mouseup',
-            finalizarArrasto
-        );
-
-    }
-
-    function iniciarArrasto(event) {
-
-        if (
-            event.target.closest(
-                '#locador-minimizar'
-            )
-        ) {
-            return;
         }
+        catch (erro) {
 
-        if (
-            event.target.closest(
-                '#locador-resize'
-            )
-        ) {
-            return;
-        }
-
-        if (redimensionando) {
-            return;
-        }
-
-        arrastando = true;
-
-        const rect =
-            painel.getBoundingClientRect();
-
-        arrastoOffsetX =
-            event.clientX -
-            rect.left;
-
-        arrastoOffsetY =
-            event.clientY -
-            rect.top;
-
-        painel.style.right = 'auto';
-        painel.style.bottom = 'auto';
-
-        painel.style.cursor = 'grabbing';
-
-        document.body.style.userSelect =
-            'none';
-
-    }
-
-    function moverPainel(event) {
-
-        if (!arrastando) {
-            return;
-        }
-
-        let esquerda =
-            event.clientX -
-            arrastoOffsetX;
-
-        let topo =
-            event.clientY -
-            arrastoOffsetY;
-
-        const largura =
-            painel.offsetWidth;
-
-        esquerda =
-            Math.max(
-                -largura + 80,
-                Math.min(
-                    window.innerWidth - 80,
-                    esquerda
-                )
+            logErro(
+                'Erro criando camada:',
+                erro
             );
 
-        topo =
-            Math.max(
-                40,
-                Math.min(
-                    window.innerHeight - 40,
-                    topo
-                )
-            );
-
-        painel.style.left =
-            `${esquerda}px`;
-
-        painel.style.top =
-            `${topo}px`;
+        }
 
     }
 
-    function finalizarArrasto() {
 
-        if (!arrastando) {
+    /******************************************************************
+     * LAYER SWITCHER
+     ******************************************************************/
+
+    function criarLayerSwitcher() {
+
+        if (!sdk) {
             return;
         }
 
-        arrastando = false;
 
-        painel.style.cursor =
-            'default';
-
-        document.body.style.userSelect =
-            '';
-
-        salvarPosicaoPainel();
-
-    }
-
-    /************************************************************
-     * REDIMENSIONAR ALTURA
-     ************************************************************/
-
-    function configurarRedimensionamento() {
-
-        const controle =
-            document.getElementById(
-                'locador-resize'
-            );
-
-        controle.addEventListener(
-            'mousedown',
-            iniciarRedimensionamento
-        );
-
-        document.addEventListener(
-            'mousemove',
-            redimensionarPainel
-        );
-
-        document.addEventListener(
-            'mouseup',
-            finalizarRedimensionamento
-        );
-
-    }
-
-    function iniciarRedimensionamento(event) {
-
-        event.preventDefault();
-        event.stopPropagation();
-
-        redimensionando = true;
-
-        alturaInicial =
-            painel.offsetHeight;
-
-        mouseInicialY =
-            event.clientY;
-
-        document.body.style.userSelect =
-            'none';
-
-        document.body.style.cursor =
-            'ns-resize';
-
-    }
-
-    function redimensionarPainel(event) {
-
-        if (!redimensionando) {
+        if (checkboxCriado) {
             return;
         }
+
+
+        try {
+
+            sdk.LayerSwitcher.addLayerCheckbox({
+
+                name:
+                    LAYER_CHECKBOX_NAME,
+
+                isChecked:
+                    true
+
+            });
+
+
+            checkboxCriado =
+                true;
+
+
+            log(
+                'Checkbox do Layer Switcher criado.'
+            );
+
+        }
+        catch (erro) {
+
+            logErro(
+                'Erro criando checkbox:',
+                erro
+            );
+
+        }
+
+    }
+
+
+    /******************************************************************
+     * EVENTOS SDK
+     ******************************************************************/
+
+    function configurarEventosSDK() {
+
+        if (!sdk) {
+            return;
+        }
+
+
+        /**************************************************************
+         * Clique na camada
+         **************************************************************/
+
+        try {
+
+            sdk.Events.trackLayerEvents({
+
+                layerName:
+                    LAYER_NAME
+
+            });
+
+
+            eventosCamadaAtivos =
+                true;
+
+        }
+        catch (erro) {
+
+            logErro(
+                'Erro ativando eventos da camada:',
+                erro
+            );
+
+        }
+
+
+        /**************************************************************
+         * Clique no ponto
+         **************************************************************/
+
+        sdk.Events.on({
+
+            eventName:
+                'wme-layer-feature-clicked',
+
+            eventHandler:
+                evento => {
+
+                    if (
+                        evento.layerName !==
+                        LAYER_NAME
+                    ) {
+
+                        return;
+
+                    }
+
+
+                    const id =
+                        String(
+                            evento.featureId
+                        );
+
+
+                    const index =
+                        pontos.findIndex(
+                            ponto =>
+
+                                String(
+                                    ponto.id
+                                ) === id
+                        );
+
+
+                    if (
+                        index === -1
+                    ) {
+
+                        return;
+
+                    }
+
+
+                    selecionarPonto(
+                        index,
+                        false
+                    );
+
+
+                    /*
+                     * Mantém o comportamento
+                     * da versão original:
+                     * centraliza no ponto.
+                     */
+
+                    irParaPonto(
+                        index
+                    );
+
+                }
+
+        });
+
+
+        /**************************************************************
+         * VISIBILIDADE DA CAMADA
+         **************************************************************/
+
+        sdk.Events.on({
+
+            eventName:
+                'wme-layer-checkbox-toggled',
+
+            eventHandler:
+                evento => {
+
+                    if (
+                        evento.name !==
+                        LAYER_CHECKBOX_NAME
+                    ) {
+
+                        return;
+
+                    }
+
+
+                    try {
+
+                        sdk.Map.setLayerVisibility({
+
+                            layerName:
+                                LAYER_NAME,
+
+                            visibility:
+                                evento.checked
+
+                        });
+
+                    }
+                    catch (erro) {
+
+                        logErro(
+                            'Erro alterando visibilidade:',
+                            erro
+                        );
+
+                    }
+
+                }
+
+        });
+
+    }
+
+
+    /******************************************************************
+     * ÍCONE SVG
+     ******************************************************************/
+
+    function criarIconeSVG(
+        propriedades = {}
+    ) {
+
+        const categoria =
+            normalizarCategoria(
+                propriedades.nome
+            );
+
+
+        const atual =
+            propriedades.locadorAtual === true;
+
+
+        const analisado =
+            propriedades.analisado === true;
+
 
         /*
-         * Arrastar para cima:
-         * aumenta a altura.
-         *
-         * Arrastar para baixo:
-         * diminui a altura.
+         * Cores originais por categoria.
          */
 
-        const diferenca =
-            event.clientY -
-            mouseInicialY;
+        let cor =
+            '#d32f2f';
 
-        let novaAltura =
-            alturaInicial +
-            diferenca;
 
-        const alturaMaxima =
-            Math.max(
-                ALTURA_MINIMA + 100,
-                window.innerHeight - 50
+        if (
+            categoria === 'quebra-mola'
+        ) {
+
+            cor =
+                '#f57c00';
+
+        }
+        else if (
+            categoria === 'radar'
+        ) {
+
+            cor =
+                '#7b1fa2';
+
+        }
+        else if (
+            categoria === 'posto'
+        ) {
+
+            cor =
+                '#1976d2';
+
+        }
+        else if (
+            categoria === 'perigo'
+        ) {
+
+            cor =
+                '#c62828';
+
+        }
+
+
+        /*
+         * Analisado:
+         * marcador verde.
+         */
+
+        if (
+            analisado
+        ) {
+
+            cor =
+                '#2e7d32';
+
+        }
+
+
+        /*
+         * Ponto atual pendente:
+         * laranja.
+         */
+
+        if (
+            atual &&
+            !analisado
+        ) {
+
+            cor =
+                '#ff9800';
+
+        }
+
+
+        const simbolo =
+            obterSimboloCategoria(
+                categoria
             );
 
-        novaAltura =
-            Math.max(
-                ALTURA_MINIMA,
-                Math.min(
-                    alturaMaxima,
-                    novaAltura
-                )
-            );
 
-        painel.style.height =
-            `${novaAltura}px`;
+        const raio =
+            atual && !analisado
+                ? 18
+                : 15;
+
+
+        const svg = `
+
+            <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="40"
+                height="40"
+                viewBox="0 0 40 40"
+            >
+
+                ${
+                    atual && !analisado
+                        ? `
+
+                            <circle
+                                cx="20"
+                                cy="20"
+                                r="18"
+                                fill="#ffffff"
+                                opacity=".95"
+                            />
+
+                        `
+                        : ''
+                }
+
+
+                <circle
+                    cx="20"
+                    cy="20"
+                    r="${raio}"
+                    fill="${cor}"
+                    stroke="#ffffff"
+                    stroke-width="${
+                        atual && !analisado
+                            ? 3
+                            : 2.5
+                    }"
+                />
+
+
+                <text
+                    x="20"
+                    y="25"
+                    text-anchor="middle"
+                    font-family="Arial, sans-serif"
+                    font-size="${
+                        simbolo.length > 1
+                            ? 11
+                            : 17
+                    }"
+                    font-weight="bold"
+                    fill="#ffffff"
+                >
+                    ${escapeXML(simbolo)}
+                </text>
+
+            </svg>
+
+        `;
+
+
+        return (
+
+            'data:image/svg+xml;charset=UTF-8,' +
+
+            encodeURIComponent(
+                svg
+            )
+
+        );
 
     }
 
-    function finalizarRedimensionamento() {
 
-        if (!redimensionando) {
-            return;
+    /******************************************************************
+     * SÍMBOLO DO ÍCONE
+     ******************************************************************/
+
+    function obterSimboloCategoria(
+        categoria
+    ) {
+
+        switch (
+            categoria
+        ) {
+
+            case 'quebra-mola':
+                return 'QM';
+
+            case 'radar':
+                return 'R';
+
+            case 'posto':
+                return 'P';
+
+            case 'perigo':
+                return '!';
+
+            default:
+                return '•';
+
         }
-
-        redimensionando = false;
-
-        document.body.style.userSelect =
-            '';
-
-        document.body.style.cursor =
-            '';
-
-        salvarAlturaPainel();
 
     }
 
-    /************************************************************
-     * ALTURA
-     ************************************************************/
 
-    function salvarAlturaPainel() {
+    /******************************************************************
+     * CATEGORIA
+     ******************************************************************/
 
-        if (!painel) {
-            return;
-        }
+    function normalizarCategoria(
+        nome
+    ) {
 
-        localStorage.setItem(
-            PANEL_HEIGHT_KEY,
+        const texto =
             String(
-                painel.offsetHeight
+                nome || ''
             )
+                .normalize('NFD')
+                .replace(
+                    /[\u0300-\u036f]/g,
+                    ''
+                )
+                .toLowerCase()
+                .trim();
+
+
+        if (
+            texto.includes('quebra')
+            ||
+            texto.includes('mola')
+        ) {
+
+            return 'quebra-mola';
+
+        }
+
+
+        if (
+            texto.includes('radar')
+        ) {
+
+            return 'radar';
+
+        }
+
+
+        if (
+            texto.includes('posto')
+        ) {
+
+            return 'posto';
+
+        }
+
+
+        if (
+            texto.includes('perigo')
+        ) {
+
+            return 'perigo';
+
+        }
+
+
+        return 'outro';
+
+    }
+
+
+    /******************************************************************
+     * RÓTULO
+     *
+     * ÚNICA alteração desejada:
+     *
+     * Pendente:
+     * 🚧 QUEBRA-MOLA #37
+     *
+     * Analisado:
+     * ✅ 🚧 QUEBRA-MOLA #37
+     ******************************************************************/
+
+    function criarRotulo(
+        propriedades = {}
+    ) {
+
+        const numero =
+            propriedades.numero ?? '';
+
+
+        const nome =
+            propriedades.nome ||
+            'Ponto';
+
+
+        const categoria =
+            categoriaBonita(
+                nome
+            );
+
+
+        /*
+         * SOMENTE adicionamos o OK quando
+         * o ponto já foi analisado.
+         */
+
+        const status =
+            propriedades.analisado === true
+                ? '✅ '
+                : '';
+
+
+        return (
+
+            `${status}` +
+
+            `${simboloTextoCategoria(
+                categoria
+            )} ` +
+
+            `${categoria} #${numero}`
+
         );
 
     }
 
-    function restaurarAlturaPainel() {
 
-        try {
+    /******************************************************************
+     * NOME DA CATEGORIA
+     ******************************************************************/
 
-            const valor =
-                localStorage.getItem(
-                    PANEL_HEIGHT_KEY
-                );
+    function categoriaBonita(
+        nome
+    ) {
 
-            if (!valor) {
-                return;
-            }
-
-            const altura =
-                Number(valor);
-
-            if (
-                Number.isFinite(altura) &&
-                altura >= ALTURA_MINIMA
-            ) {
-
-                painel.style.height =
-                    `${altura}px`;
-
-            }
-
-        }
-        catch (erro) {
-
-            console.warn(
-                '[Locador WME] Erro restaurando altura:',
-                erro
+        const categoria =
+            normalizarCategoria(
+                nome
             );
 
-        }
 
-    }
+        switch (
+            categoria
+        ) {
 
-    /************************************************************
-     * POSIÇÃO
-     ************************************************************/
+            case 'quebra-mola':
+                return 'QUEBRA-MOLA';
 
-    function salvarPosicaoPainel() {
+            case 'radar':
+                return 'RADAR';
 
-        if (!painel) {
-            return;
-        }
+            case 'posto':
+                return 'POSTO';
 
-        const rect =
-            painel.getBoundingClientRect();
+            case 'perigo':
+                return 'PERIGO';
 
-        localStorage.setItem(
+            default:
 
-            PANEL_POSITION_KEY,
-
-            JSON.stringify({
-
-                left:
-                    rect.left,
-
-                top:
-                    rect.top
-
-            })
-
-        );
-
-    }
-
-    function restaurarPosicaoPainel() {
-
-        try {
-
-            const salvo =
-                localStorage.getItem(
-                    PANEL_POSITION_KEY
-                );
-
-            if (!salvo) {
-                return;
-            }
-
-            const dados =
-                JSON.parse(
-                    salvo
-                );
-
-            if (
-                typeof dados.left !== 'number' ||
-                typeof dados.top !== 'number'
-            ) {
-                return;
-            }
-
-            painel.style.right = 'auto';
-            painel.style.bottom = 'auto';
-
-            painel.style.left =
-                `${dados.left}px`;
-
-            painel.style.top =
-                `${dados.top}px`;
-
-        }
-        catch (erro) {
-
-            console.warn(
-                '[Locador WME] Erro restaurando posição:',
-                erro
-            );
+                return String(
+                    nome ||
+                    'PONTO'
+                )
+                    .substring(
+                        0,
+                        30
+                    )
+                    .toUpperCase();
 
         }
 
     }
 
-    /************************************************************
-     * MINIMIZAR
-     ************************************************************/
 
-    function alternarPainel() {
+    /******************************************************************
+     * EMOJI DA CATEGORIA
+     ******************************************************************/
 
-        painel.classList.toggle(
-            'minimizado'
-        );
+    function simboloTextoCategoria(
+        categoria
+    ) {
 
-        const botao =
-            document.getElementById(
-                'locador-minimizar'
-            );
+        if (
+            categoria ===
+            'QUEBRA-MOLA'
+        ) {
 
-        botao.textContent =
-            painel.classList.contains(
-                'minimizado'
-            )
-                ? '+'
-                : '−';
+            return '🚧';
+
+        }
+
+
+        if (
+            categoria ===
+            'RADAR'
+        ) {
+
+            return '📡';
+
+        }
+
+
+        if (
+            categoria ===
+            'POSTO'
+        ) {
+
+            return '⛽';
+
+        }
+
+
+        if (
+            categoria ===
+            'PERIGO'
+        ) {
+
+            return '⚠️';
+
+        }
+
+
+        return '📍';
 
     }
 
-    /************************************************************
-     * CARREGAR KML
-     ************************************************************/
 
-    function carregarKML(event) {
+    /******************************************************************
+     * CARREGAR ARQUIVO
+     ******************************************************************/
+
+    async function carregarArquivo(
+        event
+    ) {
 
         const arquivo =
             event.target.files[0];
+
 
         if (!arquivo) {
             return;
         }
 
-        kmlNome =
-            arquivo.name;
 
-        const leitor =
-            new FileReader();
+        try {
 
-        leitor.onload =
-            evento => {
+            atualizarStatus(
+                `Lendo ${arquivo.name}...`
+            );
 
-                try {
 
-                    lerKML(
-                        evento.target.result
+            const nome =
+                arquivo.name.toLowerCase();
+
+
+            let texto;
+
+
+            if (
+                nome.endsWith('.kmz')
+            ) {
+
+                texto =
+                    await lerKMZ(
+                        arquivo
+                    );
+
+            }
+            else {
+
+                texto =
+                    await arquivo.text();
+
+            }
+
+
+            kmlNome =
+                arquivo.name;
+
+
+            lerKML(
+                texto
+            );
+
+        }
+        catch (erro) {
+
+            logErro(
+                'Erro lendo arquivo:',
+                erro
+            );
+
+
+            alert(
+                'Erro ao ler o arquivo:\n\n' +
+                erro.message
+            );
+
+
+            atualizarStatus(
+                'Erro ao carregar arquivo.'
+            );
+
+        }
+
+    }
+
+
+    /******************************************************************
+     * LEITOR KMZ
+     ******************************************************************/
+
+    async function lerKMZ(
+        arquivo
+    ) {
+
+        const buffer =
+            await arquivo.arrayBuffer();
+
+
+        const bytes =
+            new Uint8Array(
+                buffer
+            );
+
+
+        let offset =
+            0;
+
+
+        while (
+            offset + 30 <=
+            bytes.length
+        ) {
+
+            const assinatura =
+                lerUint32(
+                    bytes,
+                    offset
+                );
+
+
+            /*
+             * Local file header.
+             */
+
+            if (
+                assinatura ===
+                0x04034b50
+            ) {
+
+                const metodo =
+                    lerUint16(
+                        bytes,
+                        offset + 8
+                    );
+
+
+                const tamanhoComprimido =
+                    lerUint32(
+                        bytes,
+                        offset + 18
+                    );
+
+
+                const tamanhoNome =
+                    lerUint16(
+                        bytes,
+                        offset + 26
+                    );
+
+
+                const tamanhoExtra =
+                    lerUint16(
+                        bytes,
+                        offset + 28
+                    );
+
+
+                const nomeBytes =
+                    bytes.slice(
+                        offset + 30,
+                        offset +
+                        30 +
+                        tamanhoNome
+                    );
+
+
+                const nomeEntrada =
+                    new TextDecoder()
+                        .decode(
+                            nomeBytes
+                        );
+
+
+                const inicioDados =
+                    offset +
+                    30 +
+                    tamanhoNome +
+                    tamanhoExtra;
+
+
+                const fimDados =
+                    inicioDados +
+                    tamanhoComprimido;
+
+
+                if (
+                    nomeEntrada
+                        .toLowerCase()
+                        .endsWith('.kml')
+                ) {
+
+                    const dados =
+                        bytes.slice(
+                            inicioDados,
+                            fimDados
+                        );
+
+
+                    let dadosKML;
+
+
+                    if (
+                        metodo === 0
+                    ) {
+
+                        dadosKML =
+                            dados;
+
+                    }
+                    else if (
+                        metodo === 8
+                    ) {
+
+                        if (
+                            typeof DecompressionStream !==
+                            'function'
+                        ) {
+
+                            throw new Error(
+                                'Este navegador não oferece DecompressionStream para abrir KMZ.'
+                            );
+
+                        }
+
+
+                        const stream =
+                            new Blob([
+                                dados
+                            ])
+                                .stream()
+                                .pipeThrough(
+                                    new DecompressionStream(
+                                        'deflate-raw'
+                                    )
+                                );
+
+
+                        const arrayBuffer =
+                            await new Response(
+                                stream
+                            ).arrayBuffer();
+
+
+                        dadosKML =
+                            new Uint8Array(
+                                arrayBuffer
+                            );
+
+                    }
+                    else {
+
+                        throw new Error(
+                            `Método ZIP ${metodo} não suportado no KMZ.`
+                        );
+
+                    }
+
+
+                    return new TextDecoder(
+                        'utf-8'
+                    ).decode(
+                        dadosKML
                     );
 
                 }
-                catch (erro) {
 
-                    console.error(
-                        '[Locador WME]',
-                        erro
-                    );
 
-                    alert(
-                        'Erro ao ler o KML:\n\n' +
-                        erro.message
-                    );
+                offset =
+                    fimDados;
 
-                }
 
-            };
+                continue;
 
-        leitor.readAsText(
-            arquivo
+            }
+
+
+            /*
+             * Central directory.
+             */
+
+            if (
+                assinatura ===
+                0x02014b50
+            ) {
+
+                break;
+
+            }
+
+
+            offset++;
+
+        }
+
+
+        throw new Error(
+            'Nenhum arquivo KML foi encontrado dentro do KMZ.'
         );
 
     }
 
-    /************************************************************
-     * LER KML
-     ************************************************************/
 
-    function lerKML(texto) {
+    function lerUint16(
+        bytes,
+        offset
+    ) {
+
+        return (
+
+            bytes[offset] |
+
+            (
+                bytes[offset + 1]
+                << 8
+            )
+
+        );
+
+    }
+
+
+    function lerUint32(
+        bytes,
+        offset
+    ) {
+
+        return (
+
+            bytes[offset] |
+
+            (
+                bytes[offset + 1]
+                << 8
+            ) |
+
+            (
+                bytes[offset + 2]
+                << 16
+            ) |
+
+            (
+                bytes[offset + 3]
+                << 24
+            )
+
+        ) >>> 0;
+
+    }
+
+
+    /******************************************************************
+     * LER KML
+     ******************************************************************/
+
+    function lerKML(
+        texto
+    ) {
 
         const parser =
             new DOMParser();
+
 
         const xml =
             parser.parseFromString(
                 texto,
                 'application/xml'
             );
+
 
         if (
             xml.querySelector(
@@ -1261,6 +2020,7 @@
 
         }
 
+
         const placemarks =
             Array.from(
                 xml.getElementsByTagName(
@@ -1268,10 +2028,16 @@
                 )
             );
 
-        const novosPontos = [];
+
+        const novosPontos =
+            [];
+
 
         placemarks.forEach(
-            (placemark, index) => {
+            (
+                placemark,
+                index
+            ) => {
 
                 const coordenadas =
                     placemark
@@ -1279,17 +2045,21 @@
                             'coordinates'
                         )[0];
 
+
                 if (!coordenadas) {
                     return;
                 }
+
 
                 const textoCoords =
                     coordenadas.textContent
                         .trim();
 
+
                 if (!textoCoords) {
                     return;
                 }
+
 
                 const primeiro =
                     textoCoords
@@ -1297,18 +2067,22 @@
                             /[\s\r\n]+/
                         )[0];
 
+
                 const partes =
                     primeiro.split(',');
+
 
                 const longitude =
                     Number(
                         partes[0]
                     );
 
+
                 const latitude =
                     Number(
                         partes[1]
                     );
+
 
                 const altitude =
                     partes.length >= 3
@@ -1317,12 +2091,21 @@
                         )
                         : 0;
 
+
                 if (
-                    !Number.isFinite(latitude) ||
-                    !Number.isFinite(longitude)
+                    !Number.isFinite(
+                        latitude
+                    )
+                    ||
+                    !Number.isFinite(
+                        longitude
+                    )
                 ) {
+
                     return;
+
                 }
+
 
                 const nome =
                     obterTexto(
@@ -1330,11 +2113,13 @@
                         'name'
                     );
 
+
                 const descricao =
                     obterTexto(
                         placemark,
                         'description'
                     );
+
 
                 novosPontos.push({
 
@@ -1366,7 +2151,10 @@
             }
         );
 
-        if (!novosPontos.length) {
+
+        if (
+            !novosPontos.length
+        ) {
 
             throw new Error(
                 'Nenhuma coordenada encontrada no KML.'
@@ -1374,11 +2162,14 @@
 
         }
 
+
         pontos =
             novosPontos;
 
+
         pontoAtual =
             0;
+
 
         restaurarProgresso();
 
@@ -1388,31 +2179,25 @@
 
         atualizarLista();
 
-        document
-            .getElementById(
-                'locador-status'
-            )
-            .textContent =
-                `${kmlNome} — ${pontos.length} pontos carregados.`;
 
-        document
-            .getElementById(
-                'locador-limpar'
-            )
-            .disabled =
-                false;
+        atualizarStatus(
+            `${kmlNome} — ${pontos.length} pontos carregados.`
+        );
 
-        /*
-         * Vai automaticamente ao primeiro ponto.
-         */
 
-        irParaPonto(0);
+        habilitarBotoes();
+
+
+        irParaPonto(
+            0
+        );
 
     }
 
-    /************************************************************
+
+    /******************************************************************
      * TEXTO
-     ************************************************************/
+     ******************************************************************/
 
     function obterTexto(
         elemento,
@@ -1425,21 +2210,29 @@
                     tag
                 )[0];
 
+
         return encontrado
             ? encontrado.textContent.trim()
             : '';
 
     }
 
-    /************************************************************
-     * DESENHAR
-     ************************************************************/
+
+    /******************************************************************
+     * DESENHAR PONTOS
+     ******************************************************************/
 
     function desenharPontos() {
 
-        if (!sdk) {
+        if (
+            !sdk ||
+            !camadaCriada
+        ) {
+
             return;
+
         }
+
 
         try {
 
@@ -1453,20 +2246,29 @@
         }
         catch (erro) {
 
-            console.warn(
-                '[Locador WME] Não foi possível limpar camada:',
+            logErro(
+                'Erro limpando camada:',
                 erro
             );
 
         }
 
-        if (!pontos.length) {
+
+        if (
+            !pontos.length
+        ) {
+
             return;
+
         }
+
 
         const features =
             pontos.map(
-                (ponto, index) => {
+                (
+                    ponto,
+                    index
+                ) => {
 
                     return {
 
@@ -1484,6 +2286,7 @@
                             coordinates: [
 
                                 ponto.longitude,
+
                                 ponto.latitude
 
                             ]
@@ -1498,11 +2301,28 @@
                             nome:
                                 ponto.nome,
 
+                            descricao:
+                                ponto.descricao,
+
+                            latitude:
+                                ponto.latitude,
+
+                            longitude:
+                                ponto.longitude,
+
+                            altitude:
+                                ponto.altitude,
+
                             analisado:
                                 ponto.analisado === true,
 
                             locadorAtual:
-                                index === pontoAtual
+                                index === pontoAtual,
+
+                            categoria:
+                                normalizarCategoria(
+                                    ponto.nome
+                                )
 
                         }
 
@@ -1510,6 +2330,7 @@
 
                 }
             );
+
 
         try {
 
@@ -1523,6 +2344,7 @@
 
             });
 
+
             sdk.Map.redrawLayer({
 
                 layerName:
@@ -1533,8 +2355,8 @@
         }
         catch (erro) {
 
-            console.error(
-                '[Locador WME] Erro desenhando:',
+            logErro(
+                'Erro desenhando pontos:',
                 erro
             );
 
@@ -1542,9 +2364,10 @@
 
     }
 
-    /************************************************************
+
+    /******************************************************************
      * SELECIONAR PONTO
-     ************************************************************/
+     ******************************************************************/
 
     function selecionarPonto(
         index,
@@ -1552,14 +2375,19 @@
     ) {
 
         if (
-            index < 0 ||
+            index < 0
+            ||
             index >= pontos.length
         ) {
+
             return;
+
         }
+
 
         pontoAtual =
             index;
+
 
         atualizarInterface();
 
@@ -1567,12 +2395,10 @@
 
         desenharPontos();
 
-        /*
-         * Qualquer seleção originada da lista,
-         * das setas ou do teclado navega para o ponto.
-         */
 
-        if (irMapa) {
+        if (
+            irMapa
+        ) {
 
             irParaPonto(
                 index
@@ -1582,38 +2408,33 @@
 
     }
 
-    /************************************************************
-     * IR AO PONTO
-     ************************************************************/
 
-    function irParaPonto(index) {
+    /******************************************************************
+     * IR AO PONTO
+     ******************************************************************/
+
+    function irParaPonto(
+        index
+    ) {
 
         if (
-            !sdk ||
-            index < 0 ||
+            !sdk
+            ||
+            index < 0
+            ||
             index >= pontos.length
         ) {
+
             return;
+
         }
+
 
         const ponto =
             pontos[index];
 
-        try {
 
-            /*
-             * SDK OFICIAL DO WME
-             *
-             * setMapCenter aceita:
-             *
-             * {
-             *     lonLat: {
-             *         lon,
-             *         lat
-             *     },
-             *     zoomLevel
-             * }
-             */
+        try {
 
             sdk.Map.setMapCenter({
 
@@ -1636,18 +2457,11 @@
 
             });
 
-            log(
-                'Navegando para ponto:',
-                ponto.numero,
-                ponto.latitude,
-                ponto.longitude
-            );
-
         }
         catch (erro) {
 
-            console.error(
-                '[Locador WME] Erro indo ao ponto:',
+            logErro(
+                'Erro indo ao ponto:',
                 erro
             );
 
@@ -1655,24 +2469,31 @@
 
     }
 
-    /************************************************************
+
+    /******************************************************************
      * MARCAR ANALISADO
-     ************************************************************/
+     ******************************************************************/
 
     function marcarAnalisado() {
 
         if (
-            pontoAtual < 0 ||
+            pontoAtual < 0
+            ||
             !pontos[pontoAtual]
         ) {
+
             return;
+
         }
+
 
         const ponto =
             pontos[pontoAtual];
 
+
         ponto.analisado =
             !ponto.analisado;
+
 
         salvarProgresso();
 
@@ -1682,18 +2503,21 @@
 
         desenharPontos();
 
+
         /*
-         * Depois de analisar,
-         * vai automaticamente para o próximo ponto.
+         * Mantém o comportamento da versão original:
+         * marca e vai para o próximo.
          */
 
         if (
-            ponto.analisado &&
+            ponto.analisado
+            &&
             pontoAtual <
-                pontos.length - 1
+            pontos.length - 1
         ) {
 
             pontoAtual++;
+
 
             atualizarInterface();
 
@@ -1709,14 +2533,16 @@
 
     }
 
-    /************************************************************
+
+    /******************************************************************
      * INTERFACE
-     ************************************************************/
+     ******************************************************************/
 
     function atualizarInterface() {
 
         const total =
             pontos.length;
+
 
         const analisados =
             pontos.filter(
@@ -1724,59 +2550,102 @@
                     p.analisado === true
             ).length;
 
+
         const pendentes =
             total -
             analisados;
+
+
+        const progresso =
+            total > 0
+                ? Math.round(
+                    (
+                        analisados /
+                        total
+                    ) * 100
+                )
+                : 0;
+
 
         const totalEl =
             document.getElementById(
                 'locador-total'
             );
 
+
         const analisadosEl =
             document.getElementById(
                 'locador-analisados'
             );
+
 
         const pendentesEl =
             document.getElementById(
                 'locador-pendentes'
             );
 
+
+        const progressoEl =
+            document.getElementById(
+                'locador-progresso'
+            );
+
+
         if (totalEl) {
+
             totalEl.textContent =
                 total;
+
         }
+
 
         if (analisadosEl) {
+
             analisadosEl.textContent =
                 analisados;
+
         }
 
+
         if (pendentesEl) {
+
             pendentesEl.textContent =
                 pendentes;
+
         }
+
+
+        if (progressoEl) {
+
+            progressoEl.textContent =
+                `${progresso}%`;
+
+        }
+
 
         const anterior =
             document.getElementById(
                 'locador-anterior'
             );
 
+
         const proximo =
             document.getElementById(
                 'locador-proximo'
             );
+
 
         const ir =
             document.getElementById(
                 'locador-ir'
             );
 
+
         const marcar =
             document.getElementById(
                 'locador-marcar'
             );
+
 
         if (anterior) {
 
@@ -1785,14 +2654,17 @@
 
         }
 
+
         if (proximo) {
 
             proximo.disabled =
-                pontoAtual < 0 ||
+                pontoAtual < 0
+                ||
                 pontoAtual >=
                     total - 1;
 
         }
+
 
         if (ir) {
 
@@ -1801,6 +2673,7 @@
 
         }
 
+
         if (marcar) {
 
             marcar.disabled =
@@ -1808,8 +2681,10 @@
 
         }
 
+
         if (
-            pontoAtual < 0 ||
+            pontoAtual < 0
+            ||
             !pontos[pontoAtual]
         ) {
 
@@ -1817,30 +2692,53 @@
 
         }
 
+
         const ponto =
             pontos[pontoAtual];
+
 
         const info =
             document.getElementById(
                 'locador-info'
             );
 
+
         if (!info) {
             return;
         }
 
+
+        const categoria =
+            categoriaBonita(
+                ponto.nome
+            );
+
+
         info.innerHTML = `
 
-            <div class="locador-numero">
+            <div class="locador-ponto-cabecalho">
 
-                PONTO
-                ${ponto.numero}
-                /
-                ${total}
+                <div>
+
+                    PONTO
+                    ${ponto.numero}
+                    /
+                    ${total}
+
+                </div>
+
+                <span class="locador-badge">
+
+                    ${escapeHTML(
+                        categoria
+                    )}
+
+                </span>
 
             </div>
 
-            <div class="locador-tipo">
+
+            <div class="locador-nome">
 
                 ${escapeHTML(
                     ponto.nome
@@ -1848,9 +2746,12 @@
 
             </div>
 
+
             <div class="locador-linha">
 
-                <span>Latitude</span>
+                <span>
+                    Latitude
+                </span>
 
                 <b>
                     ${ponto.latitude.toFixed(7)}
@@ -1858,15 +2759,42 @@
 
             </div>
 
+
             <div class="locador-linha">
 
-                <span>Longitude</span>
+                <span>
+                    Longitude
+                </span>
 
                 <b>
                     ${ponto.longitude.toFixed(7)}
                 </b>
 
             </div>
+
+
+            <div class="locador-linha">
+
+                <span>
+                    Altitude
+                </span>
+
+                <b>
+                    ${
+                        Number.isFinite(
+                            Number(
+                                ponto.altitude
+                            )
+                        )
+                            ? Number(
+                                ponto.altitude
+                            ).toFixed(2)
+                            : '—'
+                    }
+                </b>
+
+            </div>
+
 
             <div
                 class="
@@ -1889,6 +2817,7 @@
 
         `;
 
+
         if (marcar) {
 
             marcar.textContent =
@@ -1900,147 +2829,310 @@
 
     }
 
-    /************************************************************
-     * PROGRESSO
-     ************************************************************/
 
-    function salvarProgresso() {
+    /******************************************************************
+     * LISTA
+     ******************************************************************/
 
-        if (
-            !kmlNome ||
-            !pontos.length
-        ) {
+    function atualizarLista() {
+
+        const lista =
+            document.getElementById(
+                'locador-lista'
+            );
+
+
+        if (!lista) {
             return;
         }
 
-        localStorage.setItem(
 
-            STORAGE_KEY,
+        if (
+            !pontos.length
+        ) {
 
-            JSON.stringify({
+            lista.innerHTML = `
 
-                arquivo:
-                    kmlNome,
+                <div class="locador-vazio">
 
-                pontos:
-                    pontos.map(
-                        ponto => ({
+                    📂 Carregue um KML/KMZ
 
-                            latitude:
-                                ponto.latitude,
+                </div>
 
-                            longitude:
-                                ponto.longitude,
+            `;
 
-                            analisado:
-                                ponto.analisado
+            return;
 
-                        })
-                    )
+        }
 
-            })
 
-        );
+        let inicio =
+            Math.max(
+                0,
+                pontoAtual
+            );
 
-    }
 
-    function restaurarProgresso() {
+        if (
+            inicio + 10 >
+            pontos.length
+        ) {
 
-        try {
-
-            const salvo =
-                localStorage.getItem(
-                    STORAGE_KEY
+            inicio =
+                Math.max(
+                    0,
+                    pontos.length - 10
                 );
 
-            if (!salvo) {
-                return;
-            }
+        }
 
-            const dados =
-                JSON.parse(
-                    salvo
+
+        const fim =
+            Math.min(
+                pontos.length,
+                inicio + 10
+            );
+
+
+        let html =
+            '';
+
+
+        for (
+            let i = inicio;
+            i < fim;
+            i++
+        ) {
+
+            const ponto =
+                pontos[i];
+
+
+            const atual =
+                i === pontoAtual;
+
+
+            const categoria =
+                categoriaBonita(
+                    ponto.nome
                 );
 
-            if (
-                !dados ||
-                !Array.isArray(
-                    dados.pontos
-                )
-            ) {
-                return;
-            }
 
-            pontos.forEach(
-                ponto => {
+            html += `
 
-                    const antigo =
-                        dados.pontos.find(
-                            p =>
+                <div
+                    class="
+                        locador-item
+                        ${atual ? 'atual' : ''}
+                        ${
+                            ponto.analisado
+                                ? 'analisado'
+                                : 'pendente'
+                        }
+                    "
+                    data-index="${i}"
+                    role="button"
+                    tabindex="0"
+                >
 
-                                Math.abs(
-                                    p.latitude -
-                                    ponto.latitude
-                                ) <
-                                0.00000001
+                    <div class="item-numero">
 
-                                &&
+                        ${
+                            ponto.analisado
+                                ? '✓'
+                                : (
+                                    atual
+                                        ? '⭐'
+                                        : '○'
+                                )
+                        }
 
-                                Math.abs(
-                                    p.longitude -
-                                    ponto.longitude
-                                ) <
-                                0.00000001
-                        );
+                        ${ponto.numero}
 
-                    if (
-                        antigo &&
-                        antigo.analisado
-                    ) {
+                    </div>
 
-                        ponto.analisado =
-                            true;
 
-                    }
+                    <div class="item-conteudo">
+
+                        <div class="item-nome">
+
+                            ${simboloTextoCategoria(
+                                categoria
+                            )}
+
+                            ${escapeHTML(
+                                categoria
+                            )}
+
+                        </div>
+
+
+                        <div class="item-coord">
+
+                            ${ponto.latitude.toFixed(5)},
+                            ${ponto.longitude.toFixed(5)}
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            `;
+
+        }
+
+
+        lista.innerHTML =
+            html;
+
+
+        lista
+            .querySelectorAll(
+                '.locador-item'
+            )
+            .forEach(
+                item => {
+
+                    item.addEventListener(
+                        'click',
+                        () => {
+
+                            const index =
+                                Number(
+                                    item.dataset.index
+                                );
+
+
+                            selecionarPonto(
+                                index,
+                                true
+                            );
+
+                        }
+                    );
+
+
+                    item.addEventListener(
+                        'keydown',
+                        event => {
+
+                            if (
+                                event.key ===
+                                'Enter'
+                                ||
+                                event.key ===
+                                ' '
+                            ) {
+
+                                event.preventDefault();
+
+
+                                const index =
+                                    Number(
+                                        item.dataset.index
+                                    );
+
+
+                                selecionarPonto(
+                                    index,
+                                    true
+                                );
+
+                            }
+
+                        }
+                    );
 
                 }
             );
 
-        }
-        catch (erro) {
+    }
 
-            console.warn(
-                '[Locador WME] Erro restaurando progresso:',
-                erro
+
+    /******************************************************************
+     * HABILITAR BOTÕES
+     ******************************************************************/
+
+    function habilitarBotoes() {
+
+        const limpar =
+            document.getElementById(
+                'locador-limpar'
             );
+
+
+        if (limpar) {
+
+            limpar.disabled =
+                false;
 
         }
 
     }
 
-    /************************************************************
+
+    /******************************************************************
+     * STATUS
+     ******************************************************************/
+
+    function atualizarStatus(
+        texto
+    ) {
+
+        const elemento =
+            document.getElementById(
+                'locador-status'
+            );
+
+
+        if (elemento) {
+
+            elemento.textContent =
+                texto;
+
+        }
+
+    }
+
+
+    /******************************************************************
      * LIMPAR
-     ************************************************************/
+     ******************************************************************/
 
     function limparKML() {
 
-        if (!pontos.length) {
+        if (
+            !pontos.length
+        ) {
+
             return;
+
         }
+
 
         if (
             !confirm(
                 'Remover todos os pontos e o progresso salvo?'
             )
         ) {
+
             return;
+
         }
 
-        pontos = [];
 
-        pontoAtual = -1;
+        pontos =
+            [];
 
-        kmlNome = '';
+
+        pontoAtual =
+            -1;
+
+
+        kmlNome =
+            '';
+
 
         try {
 
@@ -2054,37 +3146,310 @@
         }
         catch (erro) {}
 
+
         localStorage.removeItem(
             STORAGE_KEY
         );
 
-        document
-            .getElementById(
-                'locador-status'
-            )
-            .textContent =
-                'Nenhum KML carregado.';
+
+        atualizarStatus(
+            'Nenhum levantamento carregado.'
+        );
+
 
         atualizarInterface();
 
         atualizarLista();
 
-        document
-            .getElementById(
+
+        const limpar =
+            document.getElementById(
                 'locador-limpar'
-            )
-            .disabled =
+            );
+
+
+        if (limpar) {
+
+            limpar.disabled =
                 true;
+
+        }
 
     }
 
-    /************************************************************
+
+    /******************************************************************
+     * PROGRESSO
+     ******************************************************************/
+
+    function salvarProgresso() {
+
+        if (
+            !kmlNome
+            ||
+            !pontos.length
+        ) {
+
+            return;
+
+        }
+
+
+        try {
+
+            localStorage.setItem(
+
+                STORAGE_KEY,
+
+                JSON.stringify({
+
+                    arquivo:
+                        kmlNome,
+
+                    pontos:
+                        pontos.map(
+                            ponto => ({
+
+                                latitude:
+                                    ponto.latitude,
+
+                                longitude:
+                                    ponto.longitude,
+
+                                analisado:
+                                    ponto.analisado
+
+                            })
+                        )
+
+                })
+
+            );
+
+        }
+        catch (erro) {
+
+            logErro(
+                'Erro salvando progresso:',
+                erro
+            );
+
+        }
+
+    }
+
+
+    /******************************************************************
+     * RESTAURAR PROGRESSO
+     ******************************************************************/
+
+    function restaurarProgresso() {
+
+        try {
+
+            const salvo =
+                localStorage.getItem(
+                    STORAGE_KEY
+                );
+
+
+            if (!salvo) {
+                return;
+            }
+
+
+            const dados =
+                JSON.parse(
+                    salvo
+                );
+
+
+            if (
+                !dados
+                ||
+                !Array.isArray(
+                    dados.pontos
+                )
+            ) {
+
+                return;
+
+            }
+
+
+            pontos.forEach(
+                ponto => {
+
+                    const antigo =
+                        dados.pontos.find(
+                            p =>
+
+                                Math.abs(
+                                    Number(
+                                        p.latitude
+                                    ) -
+                                    Number(
+                                        ponto.latitude
+                                    )
+                                ) <
+                                0.00000001
+
+                                &&
+
+                                Math.abs(
+                                    Number(
+                                        p.longitude
+                                    ) -
+                                    Number(
+                                        ponto.longitude
+                                    )
+                                ) <
+                                0.00000001
+                        );
+
+
+                    if (
+                        antigo
+                        &&
+                        antigo.analisado === true
+                    ) {
+
+                        ponto.analisado =
+                            true;
+
+                    }
+
+                }
+            );
+
+        }
+        catch (erro) {
+
+            logErro(
+                'Erro restaurando progresso:',
+                erro
+            );
+
+        }
+
+    }
+
+
+    /******************************************************************
+     * TECLADO
+     ******************************************************************/
+
+    function tratarTeclado(
+        event
+    ) {
+
+        if (
+            event.target instanceof
+                HTMLInputElement
+            ||
+            event.target instanceof
+                HTMLTextAreaElement
+            ||
+            event.target instanceof
+                HTMLSelectElement
+        ) {
+
+            return;
+
+        }
+
+
+        if (
+            event.key ===
+            'ArrowLeft'
+            &&
+            pontoAtual > 0
+        ) {
+
+            event.preventDefault();
+
+
+            selecionarPonto(
+                pontoAtual - 1,
+                true
+            );
+
+        }
+
+
+        if (
+            event.key ===
+            'ArrowRight'
+            &&
+            pontoAtual <
+            pontos.length - 1
+        ) {
+
+            event.preventDefault();
+
+
+            selecionarPonto(
+                pontoAtual + 1,
+                true
+            );
+
+        }
+
+    }
+
+
+    /******************************************************************
+     * ESTADO DA UI
+     ******************************************************************/
+
+    function salvarEstadoUI() {
+
+        try {
+
+            localStorage.setItem(
+
+                UI_STATE_KEY,
+
+                JSON.stringify({
+
+                    painel:
+                        true
+
+                })
+
+            );
+
+        }
+        catch (erro) {}
+
+    }
+
+
+    function restaurarEstadoUI() {
+
+        try {
+
+            localStorage.getItem(
+                UI_STATE_KEY
+            );
+
+        }
+        catch (erro) {}
+
+    }
+
+
+    /******************************************************************
      * ESCAPE HTML
-     ************************************************************/
+     ******************************************************************/
 
-    function escapeHTML(texto) {
+    function escapeHTML(
+        texto
+    ) {
 
-        return String(texto)
+        return String(
+            texto
+        )
 
             .replace(
                 /&/g,
@@ -2113,9 +3478,50 @@
 
     }
 
-    /************************************************************
+
+    /******************************************************************
+     * ESCAPE XML
+     ******************************************************************/
+
+    function escapeXML(
+        texto
+    ) {
+
+        return String(
+            texto
+        )
+
+            .replace(
+                /&/g,
+                '&amp;'
+            )
+
+            .replace(
+                /</g,
+                '&lt;'
+            )
+
+            .replace(
+                />/g,
+                '&gt;'
+            )
+
+            .replace(
+                /"/g,
+                '&quot;'
+            )
+
+            .replace(
+                /'/g,
+                '&apos;'
+            );
+
+    }
+
+
+    /******************************************************************
      * CSS
-     ************************************************************/
+     ******************************************************************/
 
     function criarCSS() {
 
@@ -2124,54 +3530,43 @@
                 'style'
             );
 
+
         style.textContent = `
+
+            /*
+             * ========================================================
+             * CONTAINER
+             * ========================================================
+             */
 
             #locador-wme-painel {
 
-                position: fixed;
-
-                top: 75px;
-                right: 20px;
-
-                width: 350px;
-
-                height: 650px;
-
-                min-height: ${ALTURA_MINIMA}px;
-
-                min-width: 300px;
-
-                max-height:
-                    calc(100vh - 50px);
-
-                z-index: 999999;
-
-                background: #ffffff;
-
-                border-radius: 10px;
-
-                box-shadow:
-                    0 5px 25px
-                    rgba(0,0,0,.35);
-
                 font-family:
                     Arial,
+                    Helvetica,
                     sans-serif;
 
-                color: #222;
-
-                overflow: hidden;
-
-                display: flex;
-
-                flex-direction: column;
+                color:
+                    #263238;
 
             }
 
-            #locador-cabecalho {
 
-                flex:
-                    0 0 46px;
+            .locador-container {
+
+                padding:
+                    10px;
+
+            }
+
+
+            /*
+             * ========================================================
+             * HEADER
+             * ========================================================
+             */
+
+            .locador-header {
 
                 display:
                     flex;
@@ -2179,132 +3574,160 @@
                 align-items:
                     center;
 
+                justify-content:
+                    space-between;
+
                 padding:
-                    0 10px;
+                    10px 12px;
+
+                margin-bottom:
+                    9px;
+
+                border-radius:
+                    8px;
 
                 background:
-                    #263238;
+                    linear-gradient(
+                        135deg,
+                        #263238,
+                        #37474f
+                    );
 
                 color:
                     #ffffff;
 
-                font-size:
-                    14px;
-
-                cursor:
-                    grab;
-
-                user-select:
-                    none;
-
-            }
-
-            #locador-cabecalho strong {
-
-                flex:
-                    1;
+                box-shadow:
+                    0 2px 6px
+                    rgba(
+                        0,
+                        0,
+                        0,
+                        .18
+                    );
 
             }
 
-            #locador-arrastar {
 
-                margin-right:
-                    8px;
-
-                opacity:
-                    .6;
-
-                font-size:
-                    18px;
-
-            }
-
-            #locador-minimizar {
-
-                border:
-                    0;
-
-                background:
-                    transparent;
-
-                color:
-                    white;
-
-                font-size:
-                    22px;
-
-                cursor:
-                    pointer;
-
-                width:
-                    30px;
-
-                height:
-                    30px;
-
-            }
-
-            #locador-conteudo {
-
-                flex:
-                    1;
-
-                min-height:
-                    0;
-
-                overflow-y:
-                    auto;
-
-                padding:
-                    12px;
-
-            }
-
-            #locador-wme-painel.minimizado {
-
-                height:
-                    46px;
-
-            }
-
-            #locador-wme-painel.minimizado
-            #locador-conteudo {
+            .locador-title {
 
                 display:
-                    none;
+                    flex;
+
+                align-items:
+                    center;
+
+                gap:
+                    6px;
+
+                font-size:
+                    13px;
+
+                font-weight:
+                    700;
+
+                letter-spacing:
+                    .3px;
 
             }
+
+
+            .locador-title-icon {
+
+                font-size:
+                    16px;
+
+            }
+
+
+            .locador-version {
+
+                padding:
+                    3px 6px;
+
+                border-radius:
+                    10px;
+
+                background:
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        .13
+                    );
+
+                font-size:
+                    8px;
+
+                color:
+                    #cfd8dc;
+
+            }
+
+
+            /*
+             * ========================================================
+             * CARREGAR
+             * ========================================================
+             */
 
             .locador-carregar {
 
                 display:
-                    block;
+                    flex;
+
+                align-items:
+                    center;
+
+                justify-content:
+                    center;
+
+                width:
+                    100%;
+
+                box-sizing:
+                    border-box;
 
                 padding:
-                    11px;
+                    9px;
 
                 border-radius:
-                    6px;
+                    7px;
 
                 background:
                     #1976d2;
 
                 color:
-                    white;
-
-                text-align:
-                    center;
-
-                font-weight:
-                    bold;
-
-                font-size:
-                    12px;
+                    #ffffff;
 
                 cursor:
                     pointer;
 
+                font-size:
+                    10px;
+
+                font-weight:
+                    700;
+
+                transition:
+                    .15s ease;
+
             }
+
+
+            .locador-carregar:hover {
+
+                filter:
+                    brightness(
+                        .94
+                    );
+
+                transform:
+                    translateY(
+                        -1px
+                    );
+
+            }
+
 
             .locador-carregar input {
 
@@ -2313,27 +3736,47 @@
 
             }
 
-            #locador-status {
+
+            /*
+             * ========================================================
+             * STATUS
+             * ========================================================
+             */
+
+            .locador-status {
 
                 margin-top:
-                    8px;
+                    7px;
 
                 padding:
-                    8px;
+                    7px 8px;
 
-                background:
-                    #f4f4f4;
+                border:
+                    1px solid #e0e0e0;
 
                 border-radius:
                     6px;
 
+                background:
+                    #fafafa;
+
+                color:
+                    #616161;
+
                 font-size:
-                    11px;
+                    9px;
 
                 word-break:
                     break-word;
 
             }
+
+
+            /*
+             * ========================================================
+             * CONTADORES
+             * ========================================================
+             */
 
             .locador-contadores {
 
@@ -2341,53 +3784,90 @@
                     grid;
 
                 grid-template-columns:
-                    repeat(3,1fr);
+                    repeat(
+                        3,
+                        1fr
+                    );
 
                 gap:
                     5px;
 
                 margin-top:
-                    8px;
+                    7px;
 
             }
 
-            .locador-contadores div {
 
-                background:
-                    #f5f5f5;
+            .locador-contador {
+
+                padding:
+                    7px 3px;
+
+                border:
+                    1px solid #eeeeee;
 
                 border-radius:
                     6px;
 
-                padding:
-                    7px 3px;
+                background:
+                    #fafafa;
 
                 text-align:
                     center;
 
             }
 
-            .locador-contadores b {
+
+            .locador-contador b {
 
                 display:
                     block;
 
                 font-size:
+                    17px;
+
+                line-height:
                     18px;
 
             }
 
-            .locador-contadores span {
+
+            .locador-contador span {
+
+                display:
+                    block;
+
+                margin-top:
+                    2px;
 
                 font-size:
-                    8px;
+                    7px;
 
                 color:
-                    #777;
+                    #757575;
+
+                font-weight:
+                    700;
 
             }
 
-            .locador-lista-titulo {
+
+            /*
+             * ========================================================
+             * SEÇÃO
+             * ========================================================
+             */
+
+            .locador-secao-titulo {
+
+                display:
+                    flex;
+
+                align-items:
+                    center;
+
+                justify-content:
+                    space-between;
 
                 margin-top:
                     10px;
@@ -2396,28 +3876,59 @@
                     5px;
 
                 font-size:
-                    10px;
+                    9px;
 
                 font-weight:
-                    bold;
+                    700;
 
                 color:
-                    #555;
+                    #455a64;
 
             }
 
-            #locador-lista {
 
-                border:
-                    1px solid #ddd;
+            .locador-progresso {
+
+                padding:
+                    2px 6px;
 
                 border-radius:
-                    6px;
+                    8px;
+
+                background:
+                    #e8f5e9;
+
+                color:
+                    #2e7d32;
+
+                font-size:
+                    8px;
+
+            }
+
+
+            /*
+             * ========================================================
+             * LISTA
+             * ========================================================
+             */
+
+            .locador-lista {
 
                 overflow:
                     hidden;
 
+                border:
+                    1px solid #e0e0e0;
+
+                border-radius:
+                    7px;
+
+                background:
+                    #ffffff;
+
             }
+
 
             .locador-item {
 
@@ -2425,16 +3936,10 @@
                     grid;
 
                 grid-template-columns:
-                    35px 1fr;
-
-                grid-template-rows:
-                    22px 18px;
-
-                column-gap:
-                    6px;
+                    38px 1fr;
 
                 padding:
-                    5px 7px;
+                    6px;
 
                 border-bottom:
                     1px solid #eeeeee;
@@ -2443,12 +3948,10 @@
                     pointer;
 
                 transition:
-                    background .1s;
-
-                outline:
-                    none;
+                    .12s ease;
 
             }
+
 
             .locador-item:last-child {
 
@@ -2457,6 +3960,7 @@
 
             }
 
+
             .locador-item:hover {
 
                 background:
@@ -2464,30 +3968,36 @@
 
             }
 
-            .locador-item:focus {
-
-                background:
-                    #e3f2fd;
-
-                box-shadow:
-                    inset 0 0 0 2px #1976d2;
-
-            }
 
             .locador-item.atual {
 
                 background:
-                    #fff3cd;
+                    #fff8e1;
 
                 box-shadow:
-                    inset 4px 0 0 #ff9800;
+                    inset 4px 0 0
+                    #ff9800;
 
             }
 
-            .locador-item-numero {
 
-                grid-row:
-                    1 / 3;
+            .locador-item.analisado {
+
+                background:
+                    #f5fbf6;
+
+            }
+
+
+            .locador-item.analisado:hover {
+
+                background:
+                    #e8f5e9;
+
+            }
+
+
+            .item-numero {
 
                 display:
                     flex;
@@ -2498,141 +4008,208 @@
                 justify-content:
                     center;
 
-                font-weight:
-                    bold;
-
-                font-size:
-                    12px;
-
-            }
-
-            .locador-item-nome {
-
-                overflow:
-                    hidden;
-
-                text-overflow:
-                    ellipsis;
-
-                white-space:
-                    nowrap;
-
                 font-size:
                     11px;
 
                 font-weight:
-                    bold;
+                    700;
 
             }
 
-            .locador-item-coord {
-
-                font-size:
-                    9px;
-
-                color:
-                    #888;
-
-            }
-
-            .locador-item.pendente
-            .locador-item-numero {
-
-                color:
-                    #d32f2f;
-
-            }
 
             .locador-item.analisado
-            .locador-item-numero {
+            .item-numero {
 
                 color:
                     #2e7d32;
 
             }
 
-            .locador-info {
 
-                margin-top:
-                    9px;
+            .locador-item.pendente
+            .item-numero {
 
-            }
-
-            .locador-numero {
-
-                font-size:
-                    18px;
-
-                font-weight:
-                    bold;
-
-                margin-bottom:
-                    5px;
+                color:
+                    #c62828;
 
             }
 
-            .locador-tipo {
 
-                display:
-                    inline-block;
+            .item-conteudo {
 
-                max-width:
-                    100%;
+                min-width:
+                    0;
+
+            }
+
+
+            .item-nome {
 
                 overflow:
                     hidden;
 
-                text-overflow:
-                    ellipsis;
-
                 white-space:
                     nowrap;
 
-                background:
-                    #1976d2;
-
-                color:
-                    white;
-
-                padding:
-                    4px 7px;
-
-                border-radius:
-                    4px;
+                text-overflow:
+                    ellipsis;
 
                 font-size:
                     10px;
 
                 font-weight:
-                    bold;
+                    700;
 
             }
+
+
+            .item-coord {
+
+                margin-top:
+                    2px;
+
+                color:
+                    #9e9e9e;
+
+                font-size:
+                    8px;
+
+            }
+
+
+            /*
+             * ========================================================
+             * INFORMAÇÕES DO PONTO
+             * ========================================================
+             */
+
+            .locador-info {
+
+                margin-top:
+                    7px;
+
+                padding:
+                    9px;
+
+                border:
+                    1px solid #e0e0e0;
+
+                border-radius:
+                    7px;
+
+                background:
+                    #fafafa;
+
+            }
+
+
+            .locador-ponto-cabecalho {
+
+                display:
+                    flex;
+
+                align-items:
+                    center;
+
+                justify-content:
+                    space-between;
+
+                font-size:
+                    11px;
+
+                font-weight:
+                    700;
+
+            }
+
+
+            .locador-badge {
+
+                max-width:
+                    55%;
+
+                overflow:
+                    hidden;
+
+                padding:
+                    3px 6px;
+
+                border-radius:
+                    5px;
+
+                background:
+                    #1976d2;
+
+                color:
+                    #ffffff;
+
+                white-space:
+                    nowrap;
+
+                text-overflow:
+                    ellipsis;
+
+                font-size:
+                    7px;
+
+            }
+
+
+            .locador-nome {
+
+                margin:
+                    6px 0;
+
+                font-size:
+                    10px;
+
+                font-weight:
+                    700;
+
+                color:
+                    #263238;
+
+            }
+
 
             .locador-linha {
 
                 display:
                     flex;
 
+                align-items:
+                    center;
+
                 justify-content:
                     space-between;
 
-                border-bottom:
-                    1px solid #eee;
-
                 padding:
-                    5px 0;
+                    4px 0;
+
+                border-bottom:
+                    1px solid #eeeeee;
 
                 font-size:
-                    10px;
+                    8px;
 
             }
+
 
             .locador-linha span {
 
                 color:
-                    #777;
+                    #757575;
 
             }
+
+
+            .locador-linha b {
+
+                text-align:
+                    right;
+
+            }
+
 
             .locador-estado {
 
@@ -2640,7 +4217,7 @@
                     7px;
 
                 padding:
-                    7px;
+                    6px;
 
                 border-radius:
                     5px;
@@ -2649,12 +4226,13 @@
                     center;
 
                 font-size:
-                    10px;
+                    8px;
 
                 font-weight:
-                    bold;
+                    700;
 
             }
+
 
             .locador-estado.pendente {
 
@@ -2666,6 +4244,7 @@
 
             }
 
+
             .locador-estado.analisado {
 
                 background:
@@ -2676,25 +4255,31 @@
 
             }
 
-            .locador-botoes {
+
+            /*
+             * ========================================================
+             * NAVEGAÇÃO
+             * ========================================================
+             */
+
+            .locador-navegacao {
 
                 display:
                     grid;
 
                 grid-template-columns:
-                    45px 1fr 45px;
+                    40px 1fr 40px;
 
                 gap:
                     5px;
 
                 margin-top:
-                    8px;
+                    7px;
 
             }
 
-            .locador-botoes button,
-            .locador-marcar,
-            .locador-limpar {
+
+            .locador-navegacao button {
 
                 border:
                     0;
@@ -2703,66 +4288,133 @@
                     6px;
 
                 padding:
-                    9px;
+                    8px;
+
+                background:
+                    #eceff1;
+
+                color:
+                    #37474f;
 
                 cursor:
                     pointer;
 
                 font-size:
-                    11px;
+                    10px;
 
                 font-weight:
-                    bold;
+                    700;
+
+                transition:
+                    .15s ease;
 
             }
 
-            .locador-botoes button {
 
-                background:
-                    #eceff1;
+            .locador-navegacao button:hover:not(:disabled) {
+
+                transform:
+                    translateY(
+                        -1px
+                    );
+
+                filter:
+                    brightness(
+                        .96
+                    );
 
             }
 
-            #locador-ir {
+
+            .locador-navegacao
+            .locador-ir {
 
                 background:
                     #1976d2;
 
                 color:
-                    white;
+                    #ffffff;
 
             }
 
-            .locador-marcar {
+
+            /*
+             * ========================================================
+             * BOTÕES
+             * ========================================================
+             */
+
+            .locador-btn {
 
                 width:
                     100%;
 
                 margin-top:
+                    5px;
+
+                border:
+                    0;
+
+                border-radius:
                     6px;
+
+                padding:
+                    8px;
+
+                cursor:
+                    pointer;
+
+                font-size:
+                    9px;
+
+                font-weight:
+                    700;
+
+                transition:
+                    .15s ease;
+
+            }
+
+
+            .locador-btn:hover:not(:disabled) {
+
+                transform:
+                    translateY(
+                        -1px
+                    );
+
+                filter:
+                    brightness(
+                        .96
+                    );
+
+            }
+
+
+            .locador-btn.analisado {
 
                 background:
                     #43a047;
 
                 color:
-                    white;
+                    #ffffff;
 
             }
 
-            .locador-limpar {
 
-                width:
-                    100%;
-
-                margin-top:
-                    6px;
+            .locador-btn.limpar {
 
                 background:
                     #eeeeee;
 
+                color:
+                    #424242;
+
             }
 
-            button:disabled {
+
+            .locador-btn:disabled,
+            .locador-navegacao button:disabled {
 
                 opacity:
                     .45;
@@ -2772,6 +4424,100 @@
 
             }
 
+
+            /*
+             * ========================================================
+             * LEGENDA
+             * ========================================================
+             */
+
+            .locador-legenda {
+
+                display:
+                    grid;
+
+                grid-template-columns:
+                    repeat(
+                        3,
+                        1fr
+                    );
+
+                gap:
+                    4px;
+
+                margin-top:
+                    8px;
+
+                color:
+                    #616161;
+
+                font-size:
+                    7px;
+
+            }
+
+
+            .locador-legenda div {
+
+                display:
+                    flex;
+
+                align-items:
+                    center;
+
+            }
+
+
+            .legenda-ponto {
+
+                display:
+                    inline-block;
+
+                width:
+                    8px;
+
+                height:
+                    8px;
+
+                margin-right:
+                    3px;
+
+                border-radius:
+                    50%;
+
+            }
+
+
+            .legenda-ponto.vermelho {
+
+                background:
+                    #d32f2f;
+
+            }
+
+
+            .legenda-ponto.verde {
+
+                background:
+                    #2e7d32;
+
+            }
+
+
+            .legenda-ponto.laranja {
+
+                background:
+                    #ff9800;
+
+            }
+
+
+            /*
+             * ========================================================
+             * AJUDA
+             * ========================================================
+             */
+
             .locador-ajuda {
 
                 margin-top:
@@ -2780,80 +4526,45 @@
                 padding:
                     7px;
 
-                background:
-                    #fff8e1;
+                border:
+                    1px solid #ffe0a3;
 
                 border-radius:
                     6px;
 
-                font-size:
-                    9px;
-
-                line-height:
-                    1.4;
-
-            }
-
-            #locador-resize {
-
-                position:
-                    absolute;
-
-                right:
-                    2px;
-
-                bottom:
-                    2px;
-
-                width:
-                    22px;
-
-                height:
-                    22px;
-
-                display:
-                    flex;
-
-                align-items:
-                    center;
-
-                justify-content:
-                    center;
+                background:
+                    #fff8e1;
 
                 color:
-                    #777;
+                    #6d4c41;
 
                 font-size:
-                    14px;
+                    8px;
 
-                cursor:
-                    ns-resize;
-
-                user-select:
-                    none;
-
-                z-index:
-                    10;
+                line-height:
+                    1.45;
 
             }
+
 
             .locador-vazio {
 
                 padding:
-                    20px 8px;
+                    18px 8px;
+
+                color:
+                    #9e9e9e;
 
                 text-align:
                     center;
 
-                color:
-                    #999;
-
                 font-size:
-                    10px;
+                    9px;
 
             }
 
         `;
+
 
         document.head.appendChild(
             style
@@ -2861,17 +4572,10 @@
 
     }
 
-    /************************************************************
-     * EXECUTAR
-     ************************************************************/
 
-    /*
-     * Como o @run-at é document-start, o SDK pode ainda não
-     * existir. A função iniciarSDK() aguarda até ele aparecer.
-     *
-     * Isso também segue a recomendação da documentação do WME
-     * para scripts executados antes do DOM/SDK estar disponível.
-     */
+    /******************************************************************
+     * EXECUTAR
+     ******************************************************************/
 
     iniciarSDK();
 
